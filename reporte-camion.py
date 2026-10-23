@@ -526,23 +526,47 @@ def calcular_variables_movimiento(df):
 
     df["_distancia_anterior_km"] = distancias
 
-    df["_velocidad_implicita_kmh"] = (
-        df["_distancia_anterior_km"]
-        .div(
-            df["_delta_min"].div(60)
-        )
+    # ============================================================
+    # VELOCIDAD IMPLÍCITA
+    # ============================================================
+    
+    horas_transcurridas = (
+        df["_delta_min"]
+        .div(60)
     )
-
-    df["_velocidad_implicita_kmh"] = (
-        df["_velocidad_implicita_kmh"]
-        .replace(
-            [
-                np.inf,
-                -np.inf
-            ],
-            np.nan
-        )
+    
+    df["_velocidad_implicita_kmh"] = np.nan
+    
+    mascara_tiempo_valido = (
+        horas_transcurridas > 0
     )
+    
+    df.loc[
+        mascara_tiempo_valido,
+        "_velocidad_implicita_kmh"
+    ] = (
+        df.loc[
+            mascara_tiempo_valido,
+            "_distancia_anterior_km"
+        ]
+        / horas_transcurridas.loc[
+            mascara_tiempo_valido
+        ]
+    )
+    
+    
+    # Si dos puntos tienen la misma fecha-hora,
+    # pero coordenadas diferentes, se considera un salto inválido.
+    
+    mascara_misma_hora_con_movimiento = (
+        (df["_delta_min"] <= 0)
+        & (df["_distancia_anterior_km"] > 0.05)
+    )
+    
+    df.loc[
+        mascara_misma_hora_con_movimiento,
+        "_velocidad_implicita_kmh"
+    ] = np.inf
 
     return df
 
@@ -555,6 +579,14 @@ def crear_tramos(
 ):
     """
     Divide el historial GPS en tramos coherentes.
+
+    Inicia un tramo nuevo cuando:
+    - se trata del primer punto;
+    - hay una brecha temporal excesiva;
+    - existe una velocidad implícita imposible;
+    - hay un salto geográfico excesivo;
+    - dos posiciones diferentes tienen el mismo timestamp;
+    - el orden temporal es negativo.
     """
 
     df = df.copy()
@@ -565,6 +597,11 @@ def crear_tramos(
 
     brecha_temporal = (
         df["_delta_min"] > max_gap_minutos
+    )
+
+    tiempo_invalido = (
+        (df["_delta_min"] <= 0)
+        & (df["_distancia_anterior_km"] > 0.05)
     )
 
     velocidad_excesiva = (
@@ -580,6 +617,7 @@ def crear_tramos(
     df["_nuevo_tramo"] = (
         primer_punto
         | brecha_temporal
+        | tiempo_invalido
         | velocidad_excesiva
         | salto_excesivo
     )
@@ -595,6 +633,11 @@ def crear_tramos(
         brecha_temporal,
         "_motivo_corte"
     ] = "Brecha temporal"
+
+    df.loc[
+        tiempo_invalido,
+        "_motivo_corte"
+    ] = "Coordenadas diferentes con fecha-hora repetida"
 
     df.loc[
         velocidad_excesiva,
@@ -1599,6 +1642,62 @@ df_ubicaciones = asignar_motor_a_gps(
 
 
 # ============================================================
+# REORDENAR DESPUÉS DEL CRUCE
+# ============================================================
+
+df_ubicaciones = (
+    df_ubicaciones
+    .sort_values(
+        by=[
+            "_fecha_hora",
+            "_latitud",
+            "_longitud"
+        ],
+        ascending=[
+            True,
+            True,
+            True
+        ],
+        kind="stable"
+    )
+    .reset_index(drop=True)
+)
+
+
+# ============================================================
+# ELIMINAR DUPLICADOS DESPUÉS DEL CRUCE
+# ============================================================
+
+df_ubicaciones = (
+    df_ubicaciones
+    .drop_duplicates(
+        subset=[
+            "_fecha_hora",
+            "_latitud",
+            "_longitud"
+        ],
+        keep="first"
+    )
+    .reset_index(drop=True)
+)
+
+
+# ============================================================
+# RECALCULAR MOVIMIENTO Y TRAMOS DESPUÉS DEL CRUCE
+# ============================================================
+
+df_ubicaciones = calcular_variables_movimiento(
+    df_ubicaciones
+)
+
+df_ubicaciones = crear_tramos(
+    df=df_ubicaciones,
+    max_gap_minutos=max_gap_minutos,
+    max_velocidad_kmh=max_velocidad_kmh,
+    max_salto_km=max_salto_km
+)
+
+# ============================================================
 # EVENTOS DE REPOSO
 # ============================================================
 
@@ -2073,21 +2172,55 @@ mapa = folium.Map(
 # DIBUJAR SEGMENTOS COLOREADOS
 # ============================================================
 
-for indice in range(
-    1,
-    len(df_ubicaciones)
-):
+segmentos_dibujados = 0
+segmentos_descartados = 0
 
-    anterior = df_ubicaciones.iloc[
-        indice - 1
+
+for indice in range(1, len(df_ubicaciones)):
+
+    anterior = df_ubicaciones.iloc[indice - 1]
+    actual = df_ubicaciones.iloc[indice]
+
+    mismo_tramo = (
+        anterior["_tramo"]
+        == actual["_tramo"]
+    )
+
+    delta_minutos = actual["_delta_min"]
+
+    distancia_segmento_km = actual[
+        "_distancia_anterior_km"
     ]
 
-    actual = df_ubicaciones.iloc[
-        indice
+    velocidad_segmento_kmh = actual[
+        "_velocidad_implicita_kmh"
     ]
 
-    # No unir tramos distintos.
-    if anterior["_tramo"] != actual["_tramo"]:
+    tiempo_valido = (
+        pd.notna(delta_minutos)
+        and delta_minutos > 0
+        and delta_minutos <= max_gap_minutos
+    )
+
+    distancia_valida = (
+        pd.notna(distancia_segmento_km)
+        and distancia_segmento_km <= max_salto_km
+    )
+
+    velocidad_valida = (
+        pd.isna(velocidad_segmento_kmh)
+        or velocidad_segmento_kmh <= max_velocidad_kmh
+    )
+
+    # No dibujar si falla alguno de los controles.
+    if not (
+        mismo_tramo
+        and tiempo_valido
+        and distancia_valida
+        and velocidad_valida
+    ):
+
+        segmentos_descartados += 1
         continue
 
     consumo_segmento = actual[
@@ -2136,7 +2269,10 @@ for indice in range(
         "_periodo_fin"
     ]
 
-    if pd.notna(inicio_periodo):
+    if (
+        pd.notna(inicio_periodo)
+        and pd.notna(fin_periodo)
+    ):
 
         texto_intervalo = (
             f"{inicio_periodo.strftime('%d/%m/%Y %H:%M')}"
@@ -2166,6 +2302,12 @@ for indice in range(
         f"{formatear_numero(combustible_trabajando, 2)} l"
         f"<br>Distancia trabajando estimada: "
         f"{formatear_numero(distancia_trabajando, 2)} km"
+        f"<br>Distancia GPS del segmento: "
+        f"{formatear_numero(distancia_segmento_km, 2)} km"
+        f"<br>Tiempo entre posiciones: "
+        f"{formatear_numero(delta_minutos, 1)} min"
+        f"<br>Velocidad implícita: "
+        f"{formatear_numero(velocidad_segmento_kmh, 1)} km/h"
         f"<br>Tramo GPS: {int(actual['_tramo'])}"
     )
 
@@ -2186,13 +2328,11 @@ for indice in range(
         tooltip=tooltip_segmento,
         popup=folium.Popup(
             popup_segmento,
-            max_width=350
+            max_width=360
         )
     ).add_to(mapa)
 
-
-if escala_consumo is not None:
-    escala_consumo.add_to(mapa)
+    segmentos_dibujados += 1
 
 
 # ============================================================
@@ -2443,7 +2583,25 @@ st_folium(
     returned_objects=[]
 )
 
+control_segmentos_1, control_segmentos_2 = st.columns(2)
 
+with control_segmentos_1:
+
+    st.metric(
+        "Segmentos válidos dibujados",
+        segmentos_dibujados
+    )
+
+with control_segmentos_2:
+
+    st.metric(
+        "Segmentos descartados",
+        segmentos_descartados,
+        help=(
+            "Segmentos descartados por salto geográfico, "
+            "tiempo inválido, brecha temporal o velocidad excesiva."
+        )
+    )
 # ============================================================
 # REFERENCIAS DEL MAPA
 # ============================================================
