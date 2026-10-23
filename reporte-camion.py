@@ -52,16 +52,6 @@ st.markdown(
             padding: 15px;
             border-radius: 12px;
         }
-
-        .leyenda-mapa {
-            background-color: #ffffff;
-            border: 1px solid #d1d5db;
-            border-radius: 10px;
-            padding: 12px 14px;
-            color: #111827;
-            font-size: 0.92rem;
-            line-height: 1.5;
-        }
     </style>
     """,
     unsafe_allow_html=True
@@ -73,10 +63,6 @@ st.markdown(
 # ============================================================
 
 def normalizar_texto(texto):
-    """
-    Normaliza textos para comparar nombres de columnas,
-    categorías y series.
-    """
 
     texto = str(texto).strip().lower()
 
@@ -91,25 +77,16 @@ def normalizar_texto(texto):
         if not unicodedata.combining(caracter)
     )
 
-    texto = " ".join(
-        texto.split()
-    )
-
-    return texto
+    return " ".join(texto.split())
 
 
 def buscar_columna(df, candidatos):
-    """
-    Busca una columna mediante coincidencia exacta
-    o coincidencia parcial.
-    """
 
     columnas_normalizadas = {
         normalizar_texto(columna): columna
         for columna in df.columns
     }
 
-    # Coincidencia exacta
     for candidato in candidatos:
 
         candidato_normalizado = normalizar_texto(
@@ -117,11 +94,11 @@ def buscar_columna(df, candidatos):
         )
 
         if candidato_normalizado in columnas_normalizadas:
+
             return columnas_normalizadas[
                 candidato_normalizado
             ]
 
-    # Coincidencia parcial
     for candidato in candidatos:
 
         candidato_normalizado = normalizar_texto(
@@ -134,15 +111,13 @@ def buscar_columna(df, candidatos):
         ) in columnas_normalizadas.items():
 
             if candidato_normalizado in columna_normalizada:
+
                 return columna_original
 
     return None
 
 
 def leer_csv_seguro(archivo):
-    """
-    Lee un CSV probando distintas codificaciones.
-    """
 
     codificaciones = [
         "utf-8-sig",
@@ -181,10 +156,6 @@ def leer_csv_seguro(archivo):
 
 
 def convertir_numero(serie):
-    """
-    Convierte una serie a número contemplando
-    coma o punto como separador decimal.
-    """
 
     texto = (
         serie
@@ -215,10 +186,6 @@ def convertir_numero(serie):
 
 
 def formatear_numero(valor, decimales=1):
-    """
-    Formato español:
-    punto de miles y coma decimal.
-    """
 
     if pd.isna(valor):
         return "-"
@@ -234,13 +201,10 @@ def formatear_numero(valor, decimales=1):
 
 
 # ============================================================
-# FUNCIONES DE FECHA Y HORA
+# FECHAS
 # ============================================================
 
 def convertir_fecha_hora(serie):
-    """
-    Convierte fechas con formatos diversos.
-    """
 
     return pd.to_datetime(
         serie.astype(str).str.strip(),
@@ -250,9 +214,6 @@ def convertir_fecha_hora(serie):
 
 
 def construir_fecha_hora_gps(df):
-    """
-    Construye la fecha y hora del historial GPS.
-    """
 
     columna_datetime = buscar_columna(
         df,
@@ -299,7 +260,7 @@ def construir_fecha_hora_gps(df):
         and columna_hora is not None
     ):
 
-        texto = (
+        texto_fecha_hora = (
             df[columna_fecha]
             .astype(str)
             .str.strip()
@@ -310,7 +271,7 @@ def construir_fecha_hora_gps(df):
         )
 
         return convertir_fecha_hora(
-            texto
+            texto_fecha_hora
         )
 
     if columna_fecha is not None:
@@ -327,10 +288,8 @@ def construir_fecha_hora_gps(df):
 
 
 def construir_intervalo_motor(df):
-    """
-    Construye fecha-hora inicial y final
-    de cada registro del archivo del motor.
-    """
+
+    df = df.copy()
 
     columna_fecha_inicio = buscar_columna(
         df,
@@ -423,7 +382,6 @@ def construir_intervalo_motor(df):
             - pd.Timedelta(seconds=1)
         )
 
-    # Respaldo para registros con hora final inválida
     mascara_fin_invalido = (
         df["_periodo_fin"].isna()
         | (
@@ -457,9 +415,6 @@ def calcular_distancia_km(
     latitud_2,
     longitud_2
 ):
-    """
-    Fórmula de Haversine.
-    """
 
     radio_tierra_km = 6371.0088
 
@@ -493,8 +448,13 @@ def calcular_distancia_km(
 
 def calcular_variables_movimiento(df):
     """
-    Calcula tiempo, distancia y velocidad
-    implícita entre posiciones GPS.
+    Calcula distancia, tiempo y velocidad.
+
+    IMPORTANTE:
+    Si dos registros tienen el mismo timestamp:
+    - se respeta el orden original;
+    - la velocidad queda como NaN;
+    - no se descarta automáticamente el segmento.
     """
 
     df = df.copy()
@@ -520,53 +480,40 @@ def calcular_variables_movimiento(df):
             actual["_longitud"]
         )
 
-        distancias.append(
-            distancia
-        )
+        distancias.append(distancia)
 
     df["_distancia_anterior_km"] = distancias
 
-    # ============================================================
-    # VELOCIDAD IMPLÍCITA
-    # ============================================================
-    
-    horas_transcurridas = (
-        df["_delta_min"]
-        .div(60)
-    )
-    
     df["_velocidad_implicita_kmh"] = np.nan
-    
-    mascara_tiempo_valido = (
-        horas_transcurridas > 0
+
+    mascara_tiempo_positivo = (
+        df["_delta_min"] > 0
     )
-    
+
     df.loc[
-        mascara_tiempo_valido,
+        mascara_tiempo_positivo,
         "_velocidad_implicita_kmh"
     ] = (
         df.loc[
-            mascara_tiempo_valido,
+            mascara_tiempo_positivo,
             "_distancia_anterior_km"
         ]
-        / horas_transcurridas.loc[
-            mascara_tiempo_valido
-        ]
+        / (
+            df.loc[
+                mascara_tiempo_positivo,
+                "_delta_min"
+            ]
+            / 60
+        )
     )
-    
-    
-    # Si dos puntos tienen la misma fecha-hora,
-    # pero coordenadas diferentes, se considera un salto inválido.
-    
-    mascara_misma_hora_con_movimiento = (
-        (df["_delta_min"] <= 0)
-        & (df["_distancia_anterior_km"] > 0.05)
+
+    df["_velocidad_implicita_kmh"] = (
+        df["_velocidad_implicita_kmh"]
+        .replace(
+            [np.inf, -np.inf],
+            np.nan
+        )
     )
-    
-    df.loc[
-        mascara_misma_hora_con_movimiento,
-        "_velocidad_implicita_kmh"
-    ] = np.inf
 
     return df
 
@@ -575,18 +522,15 @@ def crear_tramos(
     df,
     max_gap_minutos,
     max_velocidad_kmh,
-    max_salto_km
+    max_salto_km,
+    max_salto_misma_hora_km=5.0
 ):
     """
-    Divide el historial GPS en tramos coherentes.
+    Corta el trayecto únicamente cuando se detecta
+    una discontinuidad real.
 
-    Inicia un tramo nuevo cuando:
-    - se trata del primer punto;
-    - hay una brecha temporal excesiva;
-    - existe una velocidad implícita imposible;
-    - hay un salto geográfico excesivo;
-    - dos posiciones diferentes tienen el mismo timestamp;
-    - el orden temporal es negativo.
+    Los timestamps repetidos se permiten si los puntos
+    están a menos de max_salto_misma_hora_km.
     """
 
     df = df.copy()
@@ -599,14 +543,16 @@ def crear_tramos(
         df["_delta_min"] > max_gap_minutos
     )
 
-    tiempo_invalido = (
-        (df["_delta_min"] <= 0)
-        & (df["_distancia_anterior_km"] > 0.05)
+    tiempo_negativo = (
+        df["_delta_min"] < 0
     )
 
     velocidad_excesiva = (
-        df["_velocidad_implicita_kmh"]
-        > max_velocidad_kmh
+        df["_velocidad_implicita_kmh"].notna()
+        & (
+            df["_velocidad_implicita_kmh"]
+            > max_velocidad_kmh
+        )
     )
 
     salto_excesivo = (
@@ -614,12 +560,21 @@ def crear_tramos(
         > max_salto_km
     )
 
+    timestamp_repetido_con_salto = (
+        (df["_delta_min"] == 0)
+        & (
+            df["_distancia_anterior_km"]
+            > max_salto_misma_hora_km
+        )
+    )
+
     df["_nuevo_tramo"] = (
         primer_punto
         | brecha_temporal
-        | tiempo_invalido
+        | tiempo_negativo
         | velocidad_excesiva
         | salto_excesivo
+        | timestamp_repetido_con_salto
     )
 
     df["_motivo_corte"] = ""
@@ -635,9 +590,9 @@ def crear_tramos(
     ] = "Brecha temporal"
 
     df.loc[
-        tiempo_invalido,
+        tiempo_negativo,
         "_motivo_corte"
-    ] = "Coordenadas diferentes con fecha-hora repetida"
+    ] = "Orden temporal negativo"
 
     df.loc[
         velocidad_excesiva,
@@ -649,6 +604,11 @@ def crear_tramos(
         "_motivo_corte"
     ] = "Salto geográfico excesivo"
 
+    df.loc[
+        timestamp_repetido_con_salto,
+        "_motivo_corte"
+    ] = "Timestamp repetido con salto geográfico"
+
     df["_tramo"] = (
         df["_nuevo_tramo"]
         .cumsum()
@@ -659,10 +619,6 @@ def crear_tramos(
 
 
 def calcular_distancia_recorrido(df):
-    """
-    Suma solamente distancias pertenecientes
-    al mismo tramo GPS.
-    """
 
     if len(df) < 2:
         return 0.0
@@ -682,7 +638,7 @@ def calcular_distancia_recorrido(df):
 
 
 # ============================================================
-# PROCESAMIENTO DEL ARCHIVO DEL MOTOR
+# FUNCIONES DEL MOTOR
 # ============================================================
 
 def obtener_valor_metrica(
@@ -690,10 +646,6 @@ def obtener_valor_metrica(
     texto_categoria=None,
     texto_serie=None
 ):
-    """
-    Obtiene el valor de una métrica dentro
-    de un intervalo del motor.
-    """
 
     mascara = pd.Series(
         True,
@@ -736,10 +688,6 @@ def obtener_valor_metrica_exacto(
     categoria_exacta=None,
     serie_exacta=None
 ):
-    """
-    Obtiene una métrica utilizando coincidencia exacta
-    de categoría y serie normalizadas.
-    """
 
     mascara = pd.Series(
         True,
@@ -772,10 +720,6 @@ def obtener_valor_metrica_exacto(
 
 
 def procesar_motor(df_motor):
-    """
-    Convierte el CSV largo del motor a una tabla
-    con una fila por período.
-    """
 
     df_motor = df_motor.copy()
 
@@ -871,79 +815,41 @@ def procesar_motor(df_motor):
 
     registros = []
 
-    columnas_periodo = [
-        "_periodo_inicio",
-        "_periodo_fin"
-    ]
-
     for (
         periodo_inicio,
         periodo_fin
     ), grupo in df_motor.groupby(
-        columnas_periodo,
+        [
+            "_periodo_inicio",
+            "_periodo_fin"
+        ],
         dropna=False,
         sort=True
     ):
 
-        # ----------------------------------------------------
-        # COMBUSTIBLE TOTAL
-        # ----------------------------------------------------
-
-        combustible_total_l = (
-            obtener_valor_metrica_exacto(
-                grupo,
-                categoria_exacta=(
-                    "Combustible consumido en período"
-                ),
-                serie_exacta=(
-                    "Combustible consumido"
-                )
-            )
+        combustible_total_l = obtener_valor_metrica_exacto(
+            grupo,
+            categoria_exacta="Combustible consumido en período",
+            serie_exacta="Combustible consumido"
         )
 
-        # ----------------------------------------------------
-        # COMBUSTIBLE POR ESTADO
-        # ----------------------------------------------------
-
-        combustible_trabajando_l = (
-            obtener_valor_metrica_exacto(
-                grupo,
-                categoria_exacta=(
-                    "Combustible consumido"
-                ),
-                serie_exacta=(
-                    "Trabajando"
-                )
-            )
+        combustible_trabajando_l = obtener_valor_metrica_exacto(
+            grupo,
+            categoria_exacta="Combustible consumido",
+            serie_exacta="Trabajando"
         )
 
-        combustible_reposo_l = (
-            obtener_valor_metrica_exacto(
-                grupo,
-                categoria_exacta=(
-                    "Combustible consumido"
-                ),
-                serie_exacta=(
-                    "En reposo"
-                )
-            )
+        combustible_reposo_l = obtener_valor_metrica_exacto(
+            grupo,
+            categoria_exacta="Combustible consumido",
+            serie_exacta="En reposo"
         )
 
-        combustible_transporte_l = (
-            obtener_valor_metrica_exacto(
-                grupo,
-                categoria_exacta=(
-                    "Combustible consumido"
-                ),
-                serie_exacta=(
-                    "Transporte"
-                )
-            )
+        combustible_transporte_l = obtener_valor_metrica_exacto(
+            grupo,
+            categoria_exacta="Combustible consumido",
+            serie_exacta="Transporte"
         )
-
-        # ----------------------------------------------------
-        # UTILIZACIÓN POR ESTADO
-        # ----------------------------------------------------
 
         horas_trabajando = obtener_valor_metrica(
             grupo,
@@ -963,44 +869,21 @@ def procesar_motor(df_motor):
             texto_serie="transporte"
         )
 
-        # ----------------------------------------------------
-        # VELOCIDAD TRABAJANDO
-        # ----------------------------------------------------
-
-        velocidad_trabajando_kmh = (
-            obtener_valor_metrica(
-                grupo,
-                texto_categoria=(
-                    "velocidad de avance promedio"
-                ),
-                texto_serie="trabajando"
-            )
+        velocidad_trabajando_kmh = obtener_valor_metrica(
+            grupo,
+            texto_categoria="velocidad de avance promedio",
+            texto_serie="trabajando"
         )
 
-        # ----------------------------------------------------
-        # DISTANCIA TOTAL DEL PERÍODO
-        # ----------------------------------------------------
-
-        distancia_periodo_km = (
-            obtener_valor_metrica(
-                grupo,
-                texto_categoria="distancia",
-                texto_serie=None
-            )
+        distancia_periodo_km = obtener_valor_metrica(
+            grupo,
+            texto_categoria="distancia"
         )
 
-        # ----------------------------------------------------
-        # CONSUMO PROMEDIO EN REPOSO, SI EXISTE
-        # ----------------------------------------------------
-
-        consumo_reposo_l_h = (
-            obtener_valor_metrica(
-                grupo,
-                texto_categoria=(
-                    "consumo promedio de combustible"
-                ),
-                texto_serie="en reposo"
-            )
+        consumo_reposo_archivo = obtener_valor_metrica(
+            grupo,
+            texto_categoria="consumo promedio de combustible",
+            texto_serie="en reposo"
         )
 
         registros.append(
@@ -1016,7 +899,7 @@ def procesar_motor(df_motor):
                 "_horas_transporte": horas_transporte,
                 "_velocidad_trabajando_kmh": velocidad_trabajando_kmh,
                 "_distancia_periodo_km": distancia_periodo_km,
-                "_consumo_reposo_l_h_archivo": consumo_reposo_l_h
+                "_consumo_reposo_l_h_archivo": consumo_reposo_archivo
             }
         )
 
@@ -1027,55 +910,39 @@ def procesar_motor(df_motor):
     if df_periodos.empty:
 
         raise ValueError(
-            "No fue posible construir los intervalos "
-            "del archivo del motor."
+            "No fue posible construir los intervalos del motor."
         )
-
-    # --------------------------------------------------------
-    # DISTANCIA ESTIMADA MIENTRAS TRABAJA
-    # --------------------------------------------------------
 
     df_periodos["_distancia_trabajando_km"] = (
         df_periodos["_velocidad_trabajando_kmh"]
         * df_periodos["_horas_trabajando"]
     )
 
-    # --------------------------------------------------------
-    # CONSUMO TRABAJANDO L/KM
-    # --------------------------------------------------------
-
-    mascara_distancia_trabajo_valida = (
-        df_periodos["_distancia_trabajando_km"]
-        > 0.1
-    )
-
     df_periodos["_consumo_trabajando_l_km"] = np.nan
 
+    mascara_trabajo_valida = (
+        df_periodos["_distancia_trabajando_km"] > 0.1
+    )
+
     df_periodos.loc[
-        mascara_distancia_trabajo_valida,
+        mascara_trabajo_valida,
         "_consumo_trabajando_l_km"
     ] = (
         df_periodos.loc[
-            mascara_distancia_trabajo_valida,
+            mascara_trabajo_valida,
             "_combustible_trabajando_l"
         ]
         / df_periodos.loc[
-            mascara_distancia_trabajo_valida,
+            mascara_trabajo_valida,
             "_distancia_trabajando_km"
         ]
     )
 
-    # --------------------------------------------------------
-    # CONSUMO EN REPOSO L/H
-    # --------------------------------------------------------
-
     df_periodos["_consumo_reposo_l_h"] = (
-        df_periodos[
-            "_consumo_reposo_l_h_archivo"
-        ]
+        df_periodos["_consumo_reposo_l_h_archivo"]
     )
 
-    mascara_calcular_reposo = (
+    mascara_reposo_calculable = (
         df_periodos["_consumo_reposo_l_h"].isna()
         & (
             df_periodos["_horas_reposo"] > 0
@@ -1083,65 +950,60 @@ def procesar_motor(df_motor):
     )
 
     df_periodos.loc[
-        mascara_calcular_reposo,
+        mascara_reposo_calculable,
         "_consumo_reposo_l_h"
     ] = (
         df_periodos.loc[
-            mascara_calcular_reposo,
+            mascara_reposo_calculable,
             "_combustible_reposo_l"
         ]
         / df_periodos.loc[
-            mascara_calcular_reposo,
+            mascara_reposo_calculable,
             "_horas_reposo"
         ]
     )
 
-    # --------------------------------------------------------
-    # CONSUMO TOTAL L/KM DEL PERÍODO
-    # --------------------------------------------------------
-
     df_periodos["_consumo_total_l_km"] = np.nan
 
-    mascara_distancia_periodo_valida = (
+    mascara_distancia_total_valida = (
         df_periodos["_distancia_periodo_km"] > 0.1
     )
 
     df_periodos.loc[
-        mascara_distancia_periodo_valida,
+        mascara_distancia_total_valida,
         "_consumo_total_l_km"
     ] = (
         df_periodos.loc[
-            mascara_distancia_periodo_valida,
+            mascara_distancia_total_valida,
             "_combustible_total_l"
         ]
         / df_periodos.loc[
-            mascara_distancia_periodo_valida,
+            mascara_distancia_total_valida,
             "_distancia_periodo_km"
         ]
     )
 
-    return (
-        df_motor,
-        df_periodos
-    )
+    return df_motor, df_periodos
 
 
 # ============================================================
-# CRUCE TEMPORAL MOTOR - GPS
+# COMBINAR GPS Y MOTOR
 # ============================================================
 
 def asignar_motor_a_gps(
     df_gps,
     df_periodos
 ):
-    """
-    Asigna a cada posición GPS el intervalo del motor
-    que contiene su fecha y hora.
-    """
 
     df_gps = (
         df_gps
-        .sort_values("_fecha_hora")
+        .sort_values(
+            [
+                "_fecha_hora",
+                "_orden_original"
+            ],
+            kind="stable"
+        )
         .copy()
     )
 
@@ -1177,8 +1039,6 @@ def asignar_motor_a_gps(
         direction="backward"
     )
 
-    # El merge_asof busca el último inicio anterior.
-    # Después se verifica que el GPS esté dentro del final.
     mascara_fuera_intervalo = (
         df_cruzado["_periodo_fin"].isna()
         | (
@@ -1187,7 +1047,7 @@ def asignar_motor_a_gps(
         )
     )
 
-    columnas_datos_motor = [
+    columnas_valores_motor = [
         columna
         for columna in columnas_motor
         if columna not in [
@@ -1198,7 +1058,7 @@ def asignar_motor_a_gps(
 
     df_cruzado.loc[
         mascara_fuera_intervalo,
-        columnas_datos_motor
+        columnas_valores_motor
     ] = np.nan
 
     df_cruzado.loc[
@@ -1213,7 +1073,7 @@ def asignar_motor_a_gps(
 
 
 # ============================================================
-# POSICIÓN DE LOS EVENTOS DE REPOSO
+# EVENTOS DE REPOSO
 # ============================================================
 
 def generar_eventos_reposo(
@@ -1222,10 +1082,6 @@ def generar_eventos_reposo(
     minimo_combustible_l,
     minimo_horas_reposo
 ):
-    """
-    Busca una posición GPS representativa para cada
-    intervalo con reposo.
-    """
 
     eventos = []
 
@@ -1261,11 +1117,8 @@ def generar_eventos_reposo(
         if puntos_intervalo.empty:
             continue
 
-        # Preferimos una posición con escaso movimiento.
         puntos_intervalo["_movimiento_reposo"] = (
-            puntos_intervalo[
-                "_distancia_anterior_km"
-            ]
+            puntos_intervalo["_distancia_anterior_km"]
             .fillna(0)
         )
 
@@ -1274,12 +1127,10 @@ def generar_eventos_reposo(
             .sort_values(
                 [
                     "_movimiento_reposo",
-                    "_fecha_hora"
+                    "_fecha_hora",
+                    "_orden_original"
                 ],
-                ascending=[
-                    True,
-                    True
-                ]
+                kind="stable"
             )
         )
 
@@ -1304,9 +1155,7 @@ def generar_eventos_reposo(
             }
         )
 
-    return pd.DataFrame(
-        eventos
-    )
+    return pd.DataFrame(eventos)
 
 
 # ============================================================
@@ -1323,20 +1172,12 @@ with st.sidebar:
 
     archivo_ubicaciones = st.file_uploader(
         "Historial de ubicaciones",
-        type=["csv"],
-        help=(
-            "CSV que contiene las posiciones GPS "
-            "del camión."
-        )
+        type=["csv"]
     )
 
     archivo_motor = st.file_uploader(
         "Datos del motor",
-        type=["csv"],
-        help=(
-            "CSV que contiene combustible, utilización, "
-            "velocidad y distancia."
-        )
+        type=["csv"]
     )
 
     st.markdown("---")
@@ -1367,6 +1208,20 @@ with st.sidebar:
         step=10
     )
 
+    max_salto_misma_hora_km = st.number_input(
+        "Salto máximo con timestamp repetido, km",
+        min_value=0.1,
+        max_value=100.0,
+        value=5.0,
+        step=0.5,
+        format="%.1f",
+        help=(
+            "Cuando dos puntos tienen exactamente la misma "
+            "fecha-hora, se permiten si están a una distancia "
+            "menor o igual a este valor."
+        )
+    )
+
     st.markdown("---")
 
     st.subheader("🅿️ Eventos de reposo")
@@ -1388,8 +1243,6 @@ with st.sidebar:
         step=0.05,
         format="%.2f"
     )
-
-    st.markdown("---")
 
 
 # ============================================================
@@ -1416,14 +1269,13 @@ st.markdown(
 
 
 # ============================================================
-# VALIDAR CARGA
+# VALIDAR ARCHIVOS
 # ============================================================
 
 if archivo_ubicaciones is None:
 
     st.info(
-        "👈 Cargá el historial de ubicaciones "
-        "para comenzar."
+        "👈 Cargá el historial de ubicaciones para comenzar."
     )
 
     st.stop()
@@ -1432,8 +1284,7 @@ if archivo_ubicaciones is None:
 if archivo_motor is None:
 
     st.info(
-        "👈 Cargá también el CSV de datos del motor "
-        "para calcular los consumos."
+        "👈 Cargá también el archivo de datos del motor."
     )
 
     st.stop()
@@ -1449,6 +1300,10 @@ try:
         archivo_ubicaciones
     )
 
+    df_ubicaciones["_orden_original"] = np.arange(
+        len(df_ubicaciones)
+    )
+
 except Exception as error:
 
     st.error(
@@ -1457,10 +1312,6 @@ except Exception as error:
 
     st.stop()
 
-
-# ============================================================
-# IDENTIFICAR COLUMNAS GPS
-# ============================================================
 
 col_latitud = buscar_columna(
     df_ubicaciones,
@@ -1504,29 +1355,18 @@ col_serie = buscar_columna(
 if col_latitud is None or col_longitud is None:
 
     st.error(
-        "No se detectaron las columnas de latitud "
-        "y longitud."
+        "No se detectaron las columnas de latitud y longitud."
     )
 
-    st.write(
-        list(df_ubicaciones.columns)
-    )
+    st.write(list(df_ubicaciones.columns))
 
     st.stop()
 
 
-# ============================================================
-# LIMPIAR GPS
-# ============================================================
+cantidad_gps_original = len(df_ubicaciones)
 
-cantidad_gps_original = len(
+df_ubicaciones["_fecha_hora"] = construir_fecha_hora_gps(
     df_ubicaciones
-)
-
-df_ubicaciones["_fecha_hora"] = (
-    construir_fecha_hora_gps(
-        df_ubicaciones
-    )
 )
 
 df_ubicaciones["_latitud"] = convertir_numero(
@@ -1538,9 +1378,7 @@ df_ubicaciones["_longitud"] = convertir_numero(
 )
 
 cantidad_sin_fecha = int(
-    df_ubicaciones["_fecha_hora"]
-    .isna()
-    .sum()
+    df_ubicaciones["_fecha_hora"].isna().sum()
 )
 
 cantidad_sin_coordenadas = int(
@@ -1567,10 +1405,19 @@ df_ubicaciones = df_ubicaciones[
     & df_ubicaciones["_longitud"].between(-180, 180)
 ].copy()
 
+
+# Orden cronológico respetando el orden original.
 df_ubicaciones = (
     df_ubicaciones
     .sort_values(
-        "_fecha_hora",
+        by=[
+            "_fecha_hora",
+            "_orden_original"
+        ],
+        ascending=[
+            True,
+            True
+        ],
         kind="stable"
     )
     .drop_duplicates(
@@ -1578,7 +1425,8 @@ df_ubicaciones = (
             "_fecha_hora",
             "_latitud",
             "_longitud"
-        ]
+        ],
+        keep="first"
     )
     .reset_index(drop=True)
 )
@@ -1593,20 +1441,8 @@ if df_ubicaciones.empty:
     st.stop()
 
 
-df_ubicaciones = calcular_variables_movimiento(
-    df_ubicaciones
-)
-
-df_ubicaciones = crear_tramos(
-    df=df_ubicaciones,
-    max_gap_minutos=max_gap_minutos,
-    max_velocidad_kmh=max_velocidad_kmh,
-    max_salto_km=max_salto_km
-)
-
-
 # ============================================================
-# LEER Y PROCESAR MOTOR
+# LEER MOTOR
 # ============================================================
 
 try:
@@ -1641,20 +1477,16 @@ df_ubicaciones = asignar_motor_a_gps(
 )
 
 
-# ============================================================
-# REORDENAR DESPUÉS DEL CRUCE
-# ============================================================
-
+# Después del cruce se restaura el orden correcto.
+# No se ordena por latitud ni longitud.
 df_ubicaciones = (
     df_ubicaciones
     .sort_values(
         by=[
             "_fecha_hora",
-            "_latitud",
-            "_longitud"
+            "_orden_original"
         ],
         ascending=[
-            True,
             True,
             True
         ],
@@ -1664,28 +1496,8 @@ df_ubicaciones = (
 )
 
 
-# ============================================================
-# ELIMINAR DUPLICADOS DESPUÉS DEL CRUCE
-# ============================================================
-
-df_ubicaciones = (
-    df_ubicaciones
-    .drop_duplicates(
-        subset=[
-            "_fecha_hora",
-            "_latitud",
-            "_longitud"
-        ],
-        keep="first"
-    )
-    .reset_index(drop=True)
-)
-
-
-# ============================================================
-# RECALCULAR MOVIMIENTO Y TRAMOS DESPUÉS DEL CRUCE
-# ============================================================
-
+# Se recalculan las relaciones entre puntos únicamente
+# después de tener el DataFrame en el orden definitivo.
 df_ubicaciones = calcular_variables_movimiento(
     df_ubicaciones
 )
@@ -1694,8 +1506,10 @@ df_ubicaciones = crear_tramos(
     df=df_ubicaciones,
     max_gap_minutos=max_gap_minutos,
     max_velocidad_kmh=max_velocidad_kmh,
-    max_salto_km=max_salto_km
+    max_salto_km=max_salto_km,
+    max_salto_misma_hora_km=max_salto_misma_hora_km
 )
+
 
 # ============================================================
 # EVENTOS DE REPOSO
@@ -1704,17 +1518,13 @@ df_ubicaciones = crear_tramos(
 df_eventos_reposo = generar_eventos_reposo(
     df_periodos=df_periodos_motor,
     df_gps=df_ubicaciones,
-    minimo_combustible_l=(
-        minimo_combustible_reposo_l
-    ),
-    minimo_horas_reposo=(
-        minimo_horas_reposo
-    )
+    minimo_combustible_l=minimo_combustible_reposo_l,
+    minimo_horas_reposo=minimo_horas_reposo
 )
 
 
 # ============================================================
-# PERÍODO COMÚN DE ANÁLISIS
+# PERÍODO COMÚN
 # ============================================================
 
 fecha_inicio_gps = (
@@ -1747,14 +1557,12 @@ fecha_fin_analisis = min(
 if fecha_inicio_analisis > fecha_fin_analisis:
 
     st.error(
-        "Los archivos GPS y motor no tienen "
-        "un período temporal en común."
+        "Los archivos GPS y motor no tienen un período común."
     )
 
     st.stop()
 
 
-# Mantener indicadores dentro del período común.
 df_periodos_analisis = df_periodos_motor[
     (
         df_periodos_motor["_periodo_fin"]
@@ -1768,31 +1576,27 @@ df_periodos_analisis = df_periodos_motor[
 
 
 # ============================================================
-# IDENTIFICAR LA UNIDAD
+# INDICADORES
 # ============================================================
 
 numero_serie = "No identificado"
 
 if col_serie is not None:
 
-    series_validas = (
+    valores_serie = (
         df_ubicaciones[col_serie]
         .dropna()
         .astype(str)
         .str.strip()
     )
 
-    series_validas = series_validas[
-        series_validas.ne("")
+    valores_serie = valores_serie[
+        valores_serie.ne("")
     ].unique()
 
-    if len(series_validas) > 0:
-        numero_serie = series_validas[0]
+    if len(valores_serie) > 0:
+        numero_serie = valores_serie[0]
 
-
-# ============================================================
-# INDICADORES DE COMBUSTIBLE
-# ============================================================
 
 combustible_total_l = (
     df_periodos_analisis[
@@ -1855,52 +1659,29 @@ distancia_gps_km = calcular_distancia_recorrido(
 )
 
 
-if distancia_motor_km > 0.1:
+consumo_total_l_km = (
+    combustible_total_l / distancia_motor_km
+    if distancia_motor_km > 0.1
+    else np.nan
+)
 
-    consumo_total_l_km = (
-        combustible_total_l
-        / distancia_motor_km
-    )
+consumo_trabajando_l_km = (
+    combustible_trabajando_l
+    / distancia_trabajando_km
+    if distancia_trabajando_km > 0.1
+    else np.nan
+)
 
-else:
-
-    consumo_total_l_km = np.nan
-
-
-if distancia_trabajando_km > 0.1:
-
-    consumo_trabajando_l_km = (
-        combustible_trabajando_l
-        / distancia_trabajando_km
-    )
-
-else:
-
-    consumo_trabajando_l_km = np.nan
-
-
-if horas_reposo_total > 0:
-
-    consumo_reposo_l_h = (
-        combustible_reposo_l
-        / horas_reposo_total
-    )
-
-else:
-
-    consumo_reposo_l_h = np.nan
-
-
-cantidad_tramos = int(
-    df_ubicaciones["_tramo"].nunique()
+consumo_reposo_l_h = (
+    combustible_reposo_l / horas_reposo_total
+    if horas_reposo_total > 0
+    else np.nan
 )
 
 
-# ============================================================
-# PERÍODO EN SIDEBAR
-# ============================================================
-
 with st.sidebar:
+
+    st.markdown("---")
 
     st.subheader("📅 Período común analizado")
 
@@ -1918,44 +1699,33 @@ with st.sidebar:
         )
     )
 
-    st.caption(
-        "Los indicadores se calculan sobre el período "
-        "cubierto simultáneamente por GPS y motor."
-    )
-
-
-# ============================================================
-# TARJETAS PRINCIPALES
-# ============================================================
 
 st.subheader("📊 Indicadores generales")
 
-fila1_col1, fila1_col2, fila1_col3, fila1_col4 = (
-    st.columns(4)
-)
+col1, col2, col3, col4 = st.columns(4)
 
-with fila1_col1:
+with col1:
 
     st.metric(
         "🚛 Unidad",
         numero_serie
     )
 
-with fila1_col2:
+with col2:
 
     st.metric(
         "⛽ Combustible total",
         f"{formatear_numero(combustible_total_l, 1)} l"
     )
 
-with fila1_col3:
+with col3:
 
     st.metric(
         "⚙️ Combustible trabajando",
         f"{formatear_numero(combustible_trabajando_l, 1)} l"
     )
 
-with fila1_col4:
+with col4:
 
     st.metric(
         "🅿️ Combustible en reposo",
@@ -1963,18 +1733,16 @@ with fila1_col4:
     )
 
 
-fila2_col1, fila2_col2, fila2_col3, fila2_col4 = (
-    st.columns(4)
-)
+col5, col6, col7, col8 = st.columns(4)
 
-with fila2_col1:
+with col5:
 
     st.metric(
         "🚚 Combustible transporte",
         f"{formatear_numero(combustible_transporte_l, 1)} l"
     )
 
-with fila2_col2:
+with col6:
 
     st.metric(
         "📈 Consumo trabajando",
@@ -1985,7 +1753,7 @@ with fila2_col2:
         )
     )
 
-with fila2_col3:
+with col7:
 
     st.metric(
         "⏸️ Consumo en reposo",
@@ -1996,7 +1764,7 @@ with fila2_col3:
         )
     )
 
-with fila2_col4:
+with col8:
 
     st.metric(
         "🛣️ Distancia motor",
@@ -2039,7 +1807,7 @@ with st.expander(
 
         st.metric(
             "Tramos GPS",
-            cantidad_tramos
+            int(df_ubicaciones["_tramo"].nunique())
         )
 
 
@@ -2047,7 +1815,7 @@ st.markdown("---")
 
 
 # ============================================================
-# ESCALA DE COLORES
+# ESCALA DE CONSUMO
 # ============================================================
 
 valores_consumo_validos = (
@@ -2055,28 +1823,21 @@ valores_consumo_validos = (
         "_consumo_trabajando_l_km"
     ]
     .replace(
-        [
-            np.inf,
-            -np.inf
-        ],
+        [np.inf, -np.inf],
         np.nan
     )
     .dropna()
 )
 
-# Eliminar extremos absolutamente absurdos.
 if not valores_consumo_validos.empty:
 
-    limite_superior_filtro = (
+    limite_superior = (
         valores_consumo_validos.quantile(0.99)
     )
 
-    valores_consumo_validos = (
-        valores_consumo_validos[
-            valores_consumo_validos
-            <= limite_superior_filtro
-        ]
-    )
+    valores_consumo_validos = valores_consumo_validos[
+        valores_consumo_validos <= limite_superior
+    ]
 
 
 if len(valores_consumo_validos) >= 2:
@@ -2101,9 +1862,23 @@ if len(valores_consumo_validos) >= 2:
         valores_consumo_validos.quantile(0.95)
     )
 
-    if consumo_maximo <= consumo_minimo:
+    valores_indice = [
+        consumo_minimo,
+        consumo_p25,
+        consumo_p50,
+        consumo_p75,
+        consumo_maximo
+    ]
 
-        consumo_maximo = consumo_minimo + 0.001
+    # LinearColormap necesita valores crecientes.
+    for indice in range(1, len(valores_indice)):
+
+        if valores_indice[indice] <= valores_indice[indice - 1]:
+
+            valores_indice[indice] = (
+                valores_indice[indice - 1]
+                + 0.000001
+            )
 
     escala_consumo = LinearColormap(
         colors=[
@@ -2113,18 +1888,10 @@ if len(valores_consumo_validos) >= 2:
             "#F97316",
             "#DC2626"
         ],
-        index=[
-            consumo_minimo,
-            consumo_p25,
-            consumo_p50,
-            consumo_p75,
-            consumo_maximo
-        ],
-        vmin=consumo_minimo,
-        vmax=consumo_maximo,
-        caption=(
-            "Consumo trabajando, litros por kilómetro"
-        )
+        index=valores_indice,
+        vmin=valores_indice[0],
+        vmax=valores_indice[-1],
+        caption="Consumo trabajando, litros por kilómetro"
     )
 
 else:
@@ -2141,25 +1908,16 @@ st.subheader(
 )
 
 st.caption(
-    "Cada segmento se colorea según el consumo trabajando "
-    "en l/km del intervalo del motor correspondiente. "
-    "Los marcadores violetas muestran eventos de reposo."
-)
-
-
-centro_latitud = (
-    df_ubicaciones["_latitud"].mean()
-)
-
-centro_longitud = (
-    df_ubicaciones["_longitud"].mean()
+    "El orden del recorrido respeta la fecha-hora y, cuando "
+    "existen timestamps repetidos, conserva el orden original "
+    "del archivo. El color representa el consumo trabajando."
 )
 
 
 mapa = folium.Map(
     location=[
-        centro_latitud,
-        centro_longitud
+        df_ubicaciones["_latitud"].mean(),
+        df_ubicaciones["_longitud"].mean()
     ],
     zoom_start=7,
     control_scale=True,
@@ -2169,22 +1927,22 @@ mapa = folium.Map(
 
 
 # ============================================================
-# DIBUJAR SEGMENTOS COLOREADOS
+# DIBUJAR SEGMENTOS
 # ============================================================
 
 segmentos_dibujados = 0
 segmentos_descartados = 0
+
+descartados_por_tramo = 0
+descartados_por_tiempo = 0
+descartados_por_distancia = 0
+descartados_por_velocidad = 0
 
 
 for indice in range(1, len(df_ubicaciones)):
 
     anterior = df_ubicaciones.iloc[indice - 1]
     actual = df_ubicaciones.iloc[indice]
-
-    mismo_tramo = (
-        anterior["_tramo"]
-        == actual["_tramo"]
-    )
 
     delta_minutos = actual["_delta_min"]
 
@@ -2196,9 +1954,15 @@ for indice in range(1, len(df_ubicaciones)):
         "_velocidad_implicita_kmh"
     ]
 
+    mismo_tramo = (
+        anterior["_tramo"]
+        == actual["_tramo"]
+    )
+
+    # Se permite delta = 0.
     tiempo_valido = (
         pd.notna(delta_minutos)
-        and delta_minutos > 0
+        and delta_minutos >= 0
         and delta_minutos <= max_gap_minutos
     )
 
@@ -2207,19 +1971,34 @@ for indice in range(1, len(df_ubicaciones)):
         and distancia_segmento_km <= max_salto_km
     )
 
+    # Si delta = 0 no hay velocidad calculable,
+    # entonces manda el control de distancia.
     velocidad_valida = (
         pd.isna(velocidad_segmento_kmh)
         or velocidad_segmento_kmh <= max_velocidad_kmh
     )
 
-    # No dibujar si falla alguno de los controles.
-    if not (
-        mismo_tramo
-        and tiempo_valido
-        and distancia_valida
-        and velocidad_valida
-    ):
+    if not mismo_tramo:
 
+        descartados_por_tramo += 1
+        segmentos_descartados += 1
+        continue
+
+    if not tiempo_valido:
+
+        descartados_por_tiempo += 1
+        segmentos_descartados += 1
+        continue
+
+    if not distancia_valida:
+
+        descartados_por_distancia += 1
+        segmentos_descartados += 1
+        continue
+
+    if not velocidad_valida:
+
+        descartados_por_velocidad += 1
         segmentos_descartados += 1
         continue
 
@@ -2253,21 +2032,8 @@ for indice in range(1, len(df_ubicaciones)):
         color_segmento = "#9CA3AF"
         consumo_texto = "Sin dato comparable"
 
-    combustible_trabajando = actual[
-        "_combustible_trabajando_l"
-    ]
-
-    distancia_trabajando = actual[
-        "_distancia_trabajando_km"
-    ]
-
-    inicio_periodo = actual[
-        "_periodo_inicio"
-    ]
-
-    fin_periodo = actual[
-        "_periodo_fin"
-    ]
+    inicio_periodo = actual["_periodo_inicio"]
+    fin_periodo = actual["_periodo_fin"]
 
     if (
         pd.notna(inicio_periodo)
@@ -2286,26 +2052,20 @@ for indice in range(1, len(df_ubicaciones)):
             "Sin intervalo de motor asociado"
         )
 
-    tooltip_segmento = (
-        f"Fecha GPS: "
-        f"{actual['_fecha_hora'].strftime('%d/%m/%Y %H:%M:%S')}"
-        f" | Consumo trabajando: {consumo_texto}"
-    )
-
     popup_segmento = (
         "<b>Consumo durante el trabajo</b>"
         f"<br>Fecha GPS: "
         f"{actual['_fecha_hora'].strftime('%d/%m/%Y %H:%M:%S')}"
         f"<br>Intervalo motor: {texto_intervalo}"
-        f"<br>Consumo: {consumo_texto}"
+        f"<br>Consumo trabajando: {consumo_texto}"
         f"<br>Combustible trabajando: "
-        f"{formatear_numero(combustible_trabajando, 2)} l"
+        f"{formatear_numero(actual['_combustible_trabajando_l'], 2)} l"
         f"<br>Distancia trabajando estimada: "
-        f"{formatear_numero(distancia_trabajando, 2)} km"
+        f"{formatear_numero(actual['_distancia_trabajando_km'], 2)} km"
         f"<br>Distancia GPS del segmento: "
-        f"{formatear_numero(distancia_segmento_km, 2)} km"
+        f"{formatear_numero(distancia_segmento_km, 3)} km"
         f"<br>Tiempo entre posiciones: "
-        f"{formatear_numero(delta_minutos, 1)} min"
+        f"{formatear_numero(delta_minutos, 2)} min"
         f"<br>Velocidad implícita: "
         f"{formatear_numero(velocidad_segmento_kmh, 1)} km/h"
         f"<br>Tramo GPS: {int(actual['_tramo'])}"
@@ -2325,14 +2085,21 @@ for indice in range(1, len(df_ubicaciones)):
         color=color_segmento,
         weight=5,
         opacity=0.92,
-        tooltip=tooltip_segmento,
+        tooltip=(
+            f"Consumo trabajando: {consumo_texto}"
+        ),
         popup=folium.Popup(
             popup_segmento,
-            max_width=360
+            max_width=370
         )
     ).add_to(mapa)
 
     segmentos_dibujados += 1
+
+
+if escala_consumo is not None:
+
+    escala_consumo.add_to(mapa)
 
 
 # ============================================================
@@ -2360,20 +2127,12 @@ if not df_eventos_reposo.empty:
             "_consumo_reposo_l_h"
         ]
 
-        inicio_reposo = evento[
-            "_periodo_inicio"
-        ]
-
-        fin_reposo = evento[
-            "_periodo_fin"
-        ]
-
         popup_reposo = (
             "<b>🅿️ Evento de reposo</b>"
             f"<br>Inicio: "
-            f"{inicio_reposo.strftime('%d/%m/%Y %H:%M')}"
+            f"{evento['_periodo_inicio'].strftime('%d/%m/%Y %H:%M')}"
             f"<br>Fin: "
-            f"{fin_reposo.strftime('%d/%m/%Y %H:%M')}"
+            f"{evento['_periodo_fin'].strftime('%d/%m/%Y %H:%M')}"
             f"<br>Tiempo en reposo: "
             f"{formatear_numero(horas_reposo, 2)} h"
             f"<br>Combustible consumido: "
@@ -2382,8 +2141,6 @@ if not df_eventos_reposo.empty:
             f"{formatear_numero(consumo_reposo, 2)} l/h"
         )
 
-        # El radio aumenta moderadamente según
-        # los litros consumidos en reposo.
         radio = 6
 
         if pd.notna(litros_reposo):
@@ -2415,27 +2172,17 @@ if not df_eventos_reposo.empty:
                 popup_reposo,
                 max_width=330
             )
-        ).add_to(
-            grupo_reposo
-        )
+        ).add_to(grupo_reposo)
 
-    grupo_reposo.add_to(
-        mapa
-    )
+    grupo_reposo.add_to(mapa)
 
 
 # ============================================================
-# MARCADOR DE INICIO
+# INICIO Y FIN
 # ============================================================
 
 inicio = df_ubicaciones.iloc[0]
-
-popup_inicio = (
-    "<b>Inicio del historial</b>"
-    f"<br>{inicio['_fecha_hora'].strftime('%d/%m/%Y %H:%M:%S')}"
-    f"<br>Latitud: {inicio['_latitud']:.6f}"
-    f"<br>Longitud: {inicio['_longitud']:.6f}"
-)
+fin = df_ubicaciones.iloc[-1]
 
 folium.Marker(
     location=[
@@ -2444,7 +2191,10 @@ folium.Marker(
     ],
     tooltip="Inicio del historial",
     popup=folium.Popup(
-        popup_inicio,
+        (
+            "<b>Inicio del historial</b>"
+            f"<br>{inicio['_fecha_hora'].strftime('%d/%m/%Y %H:%M:%S')}"
+        ),
         max_width=280
     ),
     icon=folium.Icon(
@@ -2455,19 +2205,6 @@ folium.Marker(
 ).add_to(mapa)
 
 
-# ============================================================
-# MARCADOR DE FIN
-# ============================================================
-
-fin = df_ubicaciones.iloc[-1]
-
-popup_fin = (
-    "<b>Fin del historial</b>"
-    f"<br>{fin['_fecha_hora'].strftime('%d/%m/%Y %H:%M:%S')}"
-    f"<br>Latitud: {fin['_latitud']:.6f}"
-    f"<br>Longitud: {fin['_longitud']:.6f}"
-)
-
 folium.Marker(
     location=[
         fin["_latitud"],
@@ -2475,7 +2212,10 @@ folium.Marker(
     ],
     tooltip="Fin del historial",
     popup=folium.Popup(
-        popup_fin,
+        (
+            "<b>Fin del historial</b>"
+            f"<br>{fin['_fecha_hora'].strftime('%d/%m/%Y %H:%M:%S')}"
+        ),
         max_width=280
     ),
     icon=folium.Icon(
@@ -2487,7 +2227,7 @@ folium.Marker(
 
 
 # ============================================================
-# MARCAR INICIOS DE TRAMOS
+# INICIOS DE TRAMOS
 # ============================================================
 
 for numero_tramo, df_tramo in df_ubicaciones.groupby(
@@ -2499,12 +2239,6 @@ for numero_tramo, df_tramo in df_ubicaciones.groupby(
         continue
 
     primer_punto = df_tramo.iloc[0]
-
-    popup_corte = (
-        f"<b>Inicio del tramo {numero_tramo}</b>"
-        f"<br>{primer_punto['_fecha_hora'].strftime('%d/%m/%Y %H:%M:%S')}"
-        f"<br>Motivo: {primer_punto['_motivo_corte']}"
-    )
 
     folium.CircleMarker(
         location=[
@@ -2518,8 +2252,12 @@ for numero_tramo, df_tramo in df_ubicaciones.groupby(
         fill_opacity=1,
         tooltip=f"Inicio del tramo {numero_tramo}",
         popup=folium.Popup(
-            popup_corte,
-            max_width=300
+            (
+                f"<b>Inicio del tramo {numero_tramo}</b>"
+                f"<br>{primer_punto['_fecha_hora'].strftime('%d/%m/%Y %H:%M:%S')}"
+                f"<br>Motivo: {primer_punto['_motivo_corte']}"
+            ),
+            max_width=320
         )
     ).add_to(mapa)
 
@@ -2528,53 +2266,27 @@ for numero_tramo, df_tramo in df_ubicaciones.groupby(
 # AJUSTAR MAPA
 # ============================================================
 
-latitud_minima = (
-    df_ubicaciones["_latitud"].min()
-)
-
-latitud_maxima = (
-    df_ubicaciones["_latitud"].max()
-)
-
-longitud_minima = (
-    df_ubicaciones["_longitud"].min()
-)
-
-longitud_maxima = (
-    df_ubicaciones["_longitud"].max()
-)
-
-if (
-    latitud_minima != latitud_maxima
-    or longitud_minima != longitud_maxima
-):
-
-    mapa.fit_bounds(
+mapa.fit_bounds(
+    [
         [
-            [
-                latitud_minima,
-                longitud_minima
-            ],
-            [
-                latitud_maxima,
-                longitud_maxima
-            ]
+            df_ubicaciones["_latitud"].min(),
+            df_ubicaciones["_longitud"].min()
         ],
-        padding=[
-            20,
-            20
+        [
+            df_ubicaciones["_latitud"].max(),
+            df_ubicaciones["_longitud"].max()
         ]
-    )
-
+    ],
+    padding=[
+        20,
+        20
+    ]
+)
 
 folium.LayerControl(
     collapsed=False
 ).add_to(mapa)
 
-
-# ============================================================
-# MOSTRAR MAPA
-# ============================================================
 
 st_folium(
     mapa,
@@ -2583,27 +2295,72 @@ st_folium(
     returned_objects=[]
 )
 
-control_segmentos_1, control_segmentos_2 = st.columns(2)
 
-with control_segmentos_1:
+# ============================================================
+# CONTROL DE SEGMENTOS
+# ============================================================
+
+control1, control2, control3 = st.columns(3)
+
+with control1:
+
+    st.metric(
+        "Segmentos analizados",
+        max(len(df_ubicaciones) - 1, 0)
+    )
+
+with control2:
 
     st.metric(
         "Segmentos válidos dibujados",
         segmentos_dibujados
     )
 
-with control_segmentos_2:
+with control3:
 
     st.metric(
         "Segmentos descartados",
-        segmentos_descartados,
-        help=(
-            "Segmentos descartados por salto geográfico, "
-            "tiempo inválido, brecha temporal o velocidad excesiva."
-        )
+        segmentos_descartados
     )
+
+
+with st.expander(
+    "Ver motivos de descarte"
+):
+
+    motivo1, motivo2, motivo3, motivo4 = st.columns(4)
+
+    with motivo1:
+
+        st.metric(
+            "Cambio de tramo",
+            descartados_por_tramo
+        )
+
+    with motivo2:
+
+        st.metric(
+            "Tiempo inválido",
+            descartados_por_tiempo
+        )
+
+    with motivo3:
+
+        st.metric(
+            "Distancia excesiva",
+            descartados_por_distancia
+        )
+
+    with motivo4:
+
+        st.metric(
+            "Velocidad excesiva",
+            descartados_por_velocidad
+        )
+
+
 # ============================================================
-# REFERENCIAS DEL MAPA
+# REFERENCIAS
 # ============================================================
 
 ref1, ref2, ref3, ref4, ref5 = st.columns(5)
@@ -2625,7 +2382,7 @@ with ref5:
 
 
 # ============================================================
-# TABLA DE EVENTOS DE REPOSO
+# TABLA DE REPOSO
 # ============================================================
 
 st.markdown("---")
@@ -2635,7 +2392,7 @@ st.subheader("🅿️ Detalle de eventos de reposo")
 if df_eventos_reposo.empty:
 
     st.info(
-        "No se detectaron eventos que superen "
+        "No se detectaron eventos de reposo que superen "
         "los límites configurados."
     )
 
@@ -2668,30 +2425,7 @@ else:
     st.dataframe(
         tabla_reposo,
         use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Inicio": st.column_config.DatetimeColumn(
-                format="DD/MM/YYYY HH:mm"
-            ),
-            "Fin": st.column_config.DatetimeColumn(
-                format="DD/MM/YYYY HH:mm"
-            ),
-            "Horas en reposo": st.column_config.NumberColumn(
-                format="%.2f"
-            ),
-            "Combustible en reposo, l": st.column_config.NumberColumn(
-                format="%.2f"
-            ),
-            "Consumo en reposo, l/h": st.column_config.NumberColumn(
-                format="%.2f"
-            ),
-            "Latitud": st.column_config.NumberColumn(
-                format="%.6f"
-            ),
-            "Longitud": st.column_config.NumberColumn(
-                format="%.6f"
-            )
-        }
+        hide_index=True
     )
 
 
@@ -2703,38 +2437,34 @@ with st.expander(
     "🔎 Ver control técnico de la combinación"
 ):
 
-    st.write("### Registros GPS")
+    c1, c2, c3, c4 = st.columns(4)
 
-    control1, control2, control3, control4 = st.columns(4)
-
-    with control1:
+    with c1:
         st.metric(
             "GPS originales",
             cantidad_gps_original
         )
 
-    with control2:
+    with c2:
         st.metric(
             "GPS válidos",
             len(df_ubicaciones)
         )
 
-    with control3:
+    with c3:
         st.metric(
             "Sin fecha",
             cantidad_sin_fecha
         )
 
-    with control4:
+    with c4:
         st.metric(
             "Sin coordenadas",
             cantidad_sin_coordenadas
         )
 
     puntos_con_motor = int(
-        df_ubicaciones[
-            "_periodo_inicio"
-        ]
+        df_ubicaciones["_periodo_inicio"]
         .notna()
         .sum()
     )
@@ -2745,20 +2475,41 @@ with st.expander(
         * 100
     )
 
-    st.write("### Coincidencia temporal")
-
     st.metric(
         "Puntos GPS con intervalo de motor",
         (
-            f"{puntos_con_motor} "
-            f"de {len(df_ubicaciones)} "
+            f"{puntos_con_motor} de {len(df_ubicaciones)} "
             f"({formatear_numero(porcentaje_cruce, 1)} %)"
         )
     )
 
-    st.write("### Intervalos del motor procesados")
+    st.write("### Control del orden y los tramos")
 
-    columnas_motor_control = [
+    columnas_control_gps = [
+        "_orden_original",
+        "_fecha_hora",
+        "_latitud",
+        "_longitud",
+        "_delta_min",
+        "_distancia_anterior_km",
+        "_velocidad_implicita_kmh",
+        "_tramo",
+        "_motivo_corte",
+        "_periodo_inicio",
+        "_consumo_trabajando_l_km"
+    ]
+
+    st.dataframe(
+        df_ubicaciones[
+            columnas_control_gps
+        ].head(500),
+        use_container_width=True,
+        hide_index=True
+    )
+
+    st.write("### Intervalos del motor")
+
+    columnas_control_motor = [
         "_periodo_inicio",
         "_periodo_fin",
         "_combustible_total_l",
@@ -2776,31 +2527,8 @@ with st.expander(
 
     st.dataframe(
         df_periodos_motor[
-            columnas_motor_control
+            columnas_control_motor
         ],
-        use_container_width=True,
-        hide_index=True
-    )
-
-    st.write("### Puntos GPS combinados con motor")
-
-    columnas_gps_control = [
-        "_fecha_hora",
-        "_latitud",
-        "_longitud",
-        "_tramo",
-        "_periodo_inicio",
-        "_periodo_fin",
-        "_combustible_trabajando_l",
-        "_combustible_reposo_l",
-        "_consumo_trabajando_l_km",
-        "_consumo_reposo_l_h"
-    ]
-
-    st.dataframe(
-        df_ubicaciones[
-            columnas_gps_control
-        ].head(300),
         use_container_width=True,
         hide_index=True
     )
